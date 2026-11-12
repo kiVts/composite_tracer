@@ -1,5 +1,7 @@
 # Link Tracer 0.4.0
 
+[![Join Discord](https://img.shields.io/badge/Join-Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/bX4RzunsxC)
+
 This mod is a gameplay mod intended to fix a small issue that I personally had when making a helicopter, mainly targeted at composite logic nodes that are input or output.
 
 It will, at its best ability will walk through logic nodes and wires and list where does it end. 
