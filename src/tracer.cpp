@@ -1159,7 +1159,7 @@ public:
             if (value == c.inputs.end()) return "Lead ends in " + bracket(part.name) + ": Numerical Junction has no value linked";
             return scalar(p, value->second, depth + 1) + (in.node == 0 ? " (junction on branch)" : " (junction off branch)");
         }
-        case 22: { // numerical switchbox: in1 A, in2 B, in3 on/off control (native serializers/tick audited)
+        case 22: { // numerical switchbox: in1 A, in2 B, in3 on/off control
             std::string sources;
             const auto a = c.inputs.find("in1"), b = c.inputs.find("in2");
             if (a != c.inputs.end()) sources = scalar(p, a->second, depth + 1) + " (A; switch on)";

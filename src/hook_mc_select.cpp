@@ -47,15 +47,15 @@ std::array<U, std::size(kTraceClasses)> supported_vtables{};
 uint32_t context_offset = 0, definitions_offset = 0;
 
 // A game function this build's port data can't place switches tracing off, and the log names it.
-U bound(const char* what, U ghidra)
+U bound(const char* what, U address)
 {
-    const U live = game_live_if_mapped(ghidra);
+    const U live = game_live_if_mapped(address);
     if (!live)
         swlog("Link tracer: %s (%llx) not found on game build %08x; tracing stays off until Link Tracer or SWML is "
-              "updated for it", what, static_cast<unsigned long long>(ghidra), game_build());
+              "updated for it", what, static_cast<unsigned long long>(address), game_build());
     return live;
 }
-template<class T> T bind(const char* what, U ghidra) { return reinterpret_cast<T>(bound(what, ghidra)); }
+template<class T> T bind(const char* what, U address) { return reinterpret_cast<T>(bound(what, address)); }
 
 struct Snapshot { uint64_t selection = 0, session = 0, request = 0; int component = -1; Vec3 vp; bool placed = false; std::string mc; std::shared_ptr<const std::string> vehicle; };
 struct State {
