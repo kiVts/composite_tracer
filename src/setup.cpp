@@ -122,7 +122,6 @@ swml_ui_rect rect_of(swml_ui_handle h)
 }
 float height_of(swml_ui_handle h) { return rect_of(h).height; }
 
-// Moves a widget, keeping its size (a wrapped label's height is the native measured one).
 void move(swml_ui_handle h, float x, float y)
 {
     auto r = rect_of(h);
@@ -222,7 +221,8 @@ void ui(const swml_ui_event* event, void*)
         return;
     }
     lt::editor::refresh();
-    const auto view = lt::editor::view();
+    static lt::editor::View view; // UI thread only
+    lt::editor::update_view(view);
     auto it = panels.find(event->root);
     if (it == panels.end()) {
         if (view.report.title.empty()) return;
@@ -331,10 +331,14 @@ bool setup()
         else lt::editor::refresh();
     }, nullptr, parent_watch);
     if (parent_result != SWML_OK) {
+        swml3::ui::unwatch(watch);
         mod_status("off: native editor lifetime watch: %s", api->result_name(parent_result));
         return false;
     }
     if (!lt::editor::install()) {
+        // Nothing is hooked: stop the editor callbacks too, so a mod that is off does no per-frame work.
+        swml3::ui::unwatch(parent_watch);
+        swml3::ui::unwatch(watch);
         mod_status("off: logic editor contract changed; see link_tracer.log");
         return false;
     }

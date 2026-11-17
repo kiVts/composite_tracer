@@ -44,7 +44,18 @@ Print print = nullptr;
 Free release = nullptr;
 U editor_vtable = 0;
 std::array<U, std::size(kTraceClasses)> supported_vtables{};
-uint32_t context_offset = 0;
+uint32_t context_offset = 0, definitions_offset = 0;
+
+// A game function this build's port data can't place switches tracing off, and the log names it.
+U bound(const char* what, U ghidra)
+{
+    const U live = game_live_if_mapped(ghidra);
+    if (!live)
+        swlog("Link tracer: %s (%llx) not found on game build %08x; tracing stays off until Link Tracer or SWML is "
+              "updated for it", what, static_cast<unsigned long long>(ghidra), game_build());
+    return live;
+}
+template<class T> T bind(const char* what, U ghidra) { return reinterpret_cast<T>(bound(what, ghidra)); }
 
 struct Snapshot { uint64_t selection = 0, session = 0, request = 0; int component = -1; Vec3 vp; bool placed = false; std::string mc; std::shared_ptr<const std::string> vehicle; };
 struct State {
@@ -161,7 +172,7 @@ std::string mc_xml(const Identity& id)
     const U created = document(allocate(0x4a0), true);
     ref(&writer.document, created);
     GameString text;
-    options.definitions = id.world + 0xbb670;
+    options.definitions = id.world + definitions_offset;
     options.context = id.world + context_offset;
     write_mc(&writer, &options, writer.document, "microprocessor", id.native + 0x118);
     U result = 0;
@@ -199,7 +210,7 @@ void capture(bool force)
         }
         if (new_session) {
             GameString text;
-            save_vehicle(id.vehicle, id.world + context_offset, id.world + 0xbb670, &text);
+            save_vehicle(id.vehicle, id.world + context_offset, id.world + definitions_offset, &text);
             vehicle = std::make_shared<const std::string>(take(text));
         }
         std::lock_guard lock(s.mutex);
@@ -233,7 +244,12 @@ void select(U native, U block, U a3, U a4)
 } // namespace
 
 void refresh() { capture(false); }
-View view() { auto& s = state(); std::lock_guard lock(s.mutex); return s.view; }
+void update_view(View& last)
+{
+    auto& s = state();
+    std::lock_guard lock(s.mutex);
+    if (last.selection != s.view.selection || last.revision != s.view.revision) last = s.view;
+}
 void reset()
 {
     auto& s = state();
@@ -248,30 +264,48 @@ bool install()
     editor_vtable = native_find_vtable("c_game_state_vehicle_editor");
     for (size_t i = 0; i < supported_vtables.size(); ++i) {
         supported_vtables[i] = native_find_vtable(kTraceClasses[i]);
-        if (!supported_vtables[i]) return false;
+        if (!supported_vtables[i]) {
+            swlog("Link tracer: block class %s not found; tracing off", kTraceClasses[i]);
+            return false;
+        }
     }
     const U context = native_find_pattern(kContextPattern);
     if (!editor_vtable || !context ||
         !native_find_pattern(kEditorPattern) || !native_find_pattern(kOpenPattern) ||
-        !native_find_pattern(kVehiclePattern)) return false;
+        !native_find_pattern(kVehiclePattern)) {
+        swlog("Link tracer: logic editor layout not recognised on game build %08x; tracing off", game_build());
+        return false;
+    }
+    // Off unless the port data and the editor code agree.
+    definitions_offset = static_cast<uint32_t>(game_field("world", 0xbb670));
     context_offset = field<uint32_t>(context, 14);
-    if (context_offset < 0x1000 || context_offset > 0x10000) return false;
-    save_vehicle = game_ptr<SaveVehicle>(0x1404c1050);
-    allocate = game_ptr<Allocate>(0x140958c28);
-    document = game_ptr<Document>(0x140190720);
-    ref = game_ptr<Ref>(0x1408d03d0);
-    write_mc = game_ptr<WriteMc>(0x140908dd0);
-    print = game_ptr<Print>(0x1409382f0);
-    release = game_ptr<Free>(0x1409b2d50);
-    // The MC visitor and XML printer use chained unwind fragments. Signing just
-    // their entry would leave the actual writing/printing branches unchecked.
-    const U fragments[] = {game_live(0x140908df5), game_live(0x140908ea6), game_live(0x140908eb6),
-        game_live(0x140908f70), game_live(0x140908fd6), game_live(0x140908fdb),
-        game_live(0x1409382ff), game_live(0x140938322), game_live(0x14093849a), game_live(0x1409384aa)};
+    if (!definitions_offset || field<uint32_t>(context, 7) != definitions_offset ||
+        context_offset < 0x1000 || context_offset > 0x10000) {
+        swlog("Link tracer: world layout not recognised on game build %08x (definitions +%x, context +%x); tracing off",
+              game_build(), field<uint32_t>(context, 7), context_offset);
+        return false;
+    }
+    save_vehicle = bind<SaveVehicle>("vehicle writer", 0x1404c1050);
+    allocate = bind<Allocate>("allocator", 0x140958c28);
+    document = bind<Document>("XML document", 0x140190720);
+    ref = bind<Ref>("XML reference", 0x1408d03d0);
+    write_mc = bind<WriteMc>("controller writer", 0x140908dd0);
+    print = bind<Print>("XML printer", 0x1409382f0);
+    release = bind<Free>("free", 0x1409b2d50);
+    // Every part of the controller writer and the XML printer must be found, not only their entries.
+    const U fragments[] = {bound("controller writer part", 0x140908df5), bound("controller writer part", 0x140908ea6),
+        bound("controller writer part", 0x140908eb6), bound("controller writer part", 0x140908f70),
+        bound("controller writer part", 0x140908fd6), bound("controller writer part", 0x140908fdb),
+        bound("XML printer part", 0x1409382ff), bound("XML printer part", 0x140938322),
+        bound("XML printer part", 0x14093849a), bound("XML printer part", 0x1409384aa)};
     for (U address : fragments) if (!address) return false;
-    // The signed base serializer establishes the selected component's id at +8.
-    if (!save_vehicle || !allocate || !document || !ref || !write_mc || !print || !release || !game_live(0x140371310)) return false;
-    if (!hook_game(0x1407c7880, reinterpret_cast<void*>(&select), reinterpret_cast<void**>(&original_select))) return false;
+    if (!save_vehicle || !allocate || !document || !ref || !write_mc || !print || !release ||
+        !bound("component serializer", 0x140371310) || !bound("block selection", 0x1407c7880))
+        return false;
+    if (!hook_game(0x1407c7880, reinterpret_cast<void*>(&select), reinterpret_cast<void**>(&original_select))) {
+        swlog("Link tracer: block selection hook failed; tracing off");
+        return false;
+    }
     std::thread(worker).detach();
     swlog("Link tracer: native selection/serialization ready (context +%x)", context_offset);
     return true;

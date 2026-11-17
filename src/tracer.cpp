@@ -450,7 +450,7 @@ std::string display_channels(const Display& d)
     if (bits) {
         std::string text = "on/off channels ";
         const int count = d.type == 5 ? 7 : 8;
-        for (int i = 0; i < count; ++i) text += (i ? ", " : "") + std::to_string(((d.channel + i) & 31) + 1);
+        for (int i = 0; i < count; ++i) text += (i ? ", " : "") + std::to_string((((d.channel & 31) + i) & 31) + 1);
         return text + " (individual segments)";
     }
     return std::string(display_output(d) || d.type == 2 ? "on/off channel " : "number channel ") +
@@ -610,8 +610,12 @@ bool loop_channels(const std::string& script, size_t call, size_t arg, std::set<
         ++e;
         while (e < script.size() && script[e] == ' ') ++e;
         if (e >= script.size() || !isdigit(static_cast<unsigned char>(script[e]))) return false;
-        add = sign * atoi(script.c_str() + e);
+        // Only small offsets can land on channels 1..32; a huge one would overflow the channel loop below.
+        const size_t digits = e;
         while (e < script.size() && isdigit(static_cast<unsigned char>(script[e]))) ++e;
+        if (e - digits > 3) return false;
+        add = sign * atoi(script.c_str() + digits);
+        if (add < -96 || add > 96) return false;
         while (e < script.size() && script[e] == ' ') ++e;
     }
     if (e >= script.size() || script[e] != ',') return false;
@@ -925,7 +929,8 @@ public:
                 if (const McInput* inc = input("inc")) out = mc_output(p, inc->component, inc->node, depth + 1);
                 const int base = c.type == 40 ? 32 : 0;
                 const int count = std::clamp(c.object->integer("count", 32), 0, 32);
-                const int offset = c.object->integer("offset", 0);
+                const int raw_offset = c.object->integer("offset", 0);
+                const int offset = raw_offset < 0 ? -1 : raw_offset & 31; // channels wrap at 32
                 if (offset < 0) out.ends.push_back("Lead ends in " + mc + ": Composite Write picks channels at run time");
                 for (int k = 0; k < count; ++k) {
                     const McInput* in = input(fmt("in%d", k + 1).c_str());
@@ -1159,7 +1164,15 @@ public:
             const auto a = c.inputs.find("in1"), b = c.inputs.find("in2");
             if (a != c.inputs.end()) sources = scalar(p, a->second, depth + 1) + " (A; switch on)";
             if (b != c.inputs.end()) sources += (sources.empty() ? "" : " | ") + scalar(p, b->second, depth + 1) + " (B; switch off)";
-            return sources.empty() ? "Lead ends in " + bracket(part.name) + " due to a switchbox: neither A nor B is linked" : sources;
+            if (sources.empty()) return "Lead ends in " + bracket(part.name) + " due to a switchbox: neither A nor B is linked";
+            // Chained switchboxes double the text per level: keep it readable and bounded.
+            if (sources.size() > 512) {
+                size_t end = 512;
+                while (end && (static_cast<unsigned char>(sources[end]) & 0xc0) == 0x80) --end;
+                sources.resize(end);
+                sources += "...";
+            }
+            return sources;
         }
         case 19: case 20: case 33: case 34: case 58:
             return "property " + quoted(o->text("n", block_name(c.type)));
@@ -1317,7 +1330,8 @@ public:
                   edge.input.size() > 2 && std::isdigit(static_cast<unsigned char>(edge.input[2])) &&
                   std::atoi(edge.input.c_str() + 2) <= std::clamp(c.object->integer("count", 32), 0, 32)))) {
                 std::string step = name + " (rewrites channels)";
-                const int offset = c.object->integer("offset", 0);
+                const int raw_offset = c.object->integer("offset", 0);
+                const int offset = raw_offset < 0 ? -1 : raw_offset & 31; // channels wrap at 32
                 const int base = c.type == 40 ? 32 : 0;
                 const int count = std::clamp(c.object->integer("count", 32), 0, 32);
                 Ctx next = ctx;
